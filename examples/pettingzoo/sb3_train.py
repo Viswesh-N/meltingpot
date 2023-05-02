@@ -23,8 +23,15 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+
 from examples.pettingzoo import utils
 from meltingpot.python import substrate
+from MADDPG import MADDPG
+
+
 
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device(
     "cpu")
@@ -87,7 +94,7 @@ class CustomCNN(torch_layers.BaseFeaturesExtractor):
 
 def main():
   # Config
-  substrate_name = "bach_or_stravinsky_in_the_matrix__arena"
+  substrate_name = "bach_or_stravinsky_in_the_matrix__repeated"
   player_roles = substrate.get_config(substrate_name).default_player_roles
   env_config = {"substrate": substrate_name, "roles": player_roles}
 
@@ -119,78 +126,144 @@ def main():
   verbose = 3
   model_path = None  # Replace this with a saved model
 
+
+  ## Parameters for DDPG
+  episode_num = 30000
+  episode_len = 25
+  learn_interval = 100
+  random_steps = 5e4
+
+  buffer_capacity = 1000000
+  batch_size = 1024
+  gamma = 0.95
+  tau = 0.02  
+  actor_lr = 0.01
+  critic_lr = 0.01
+  
+
   env = utils.parallel_env(render_mode="rgb_array", env_config=env_config, max_cycles=rollout_len)
+  print("1",type(env))
+
+  print("1",type(env.observation_space('agent_0')))
+  print("1",type(env.action_space('agent_0')))
   env = ss.observation_lambda_v0(env, lambda x, _: x["RGB"], lambda s: s["RGB"])
-  env = ss.pettingzoo_env_to_vec_env_v1(env)
-  env = ss.concat_vec_envs_v1(
-      env,
-      num_vec_envs=num_envs,
-      num_cpus=num_cpus,
-      base_class="stable_baselines3")
-  env = vec_env.VecMonitor(env)
-  env = vec_env.VecTransposeImage(env, True)
-  env = vec_env.VecFrameStack(env, num_frames)
+  print("2",type(env))
+  print("2",type(env.observation_space('agent_0')))
+  print("2",type(env.action_space('agent_1')))
+
+  new_env = env
+  new_env.reset()
+  dim_info = {}
+  for agent_id in new_env.agents:
+     dim_info[agent_id] = []
+     print("3",type(new_env.observation_space(agent_id)))
+     dim_info[agent_id].append(new_env.observation_space(agent_id).shape[0:3])
+     dim_info[agent_id].append(new_env.action_space(agent_id).n)
 
 
-  eval_env = utils.parallel_env(
-      max_cycles=rollout_len,
-      env_config=env_config,
-      render_mode="rgb_array"
-  )
-  eval_env = ss.observation_lambda_v0(eval_env, lambda x, _: x["RGB"],
-                                      lambda s: s["RGB"])
-  eval_env = ss.pettingzoo_env_to_vec_env_v1(eval_env)
-  eval_env = ss.concat_vec_envs_v1(
-      eval_env,
-      num_vec_envs=1,
-      num_cpus=1,
-      base_class="stable_baselines3")
-  eval_env = vec_env.VecMonitor(eval_env)
-  eval_env = vec_env.VecTransposeImage(eval_env, True)
-  eval_env = vec_env.VecFrameStack(eval_env, num_frames)
-  eval_freq = 100000 // (num_envs * num_agents)
+  env_dir = os.path.join('./results', substrate_name)
+  if not os.path.exists(env_dir):
+      os.makedirs(env_dir)
+  total_files = len([file for file in os.listdir(env_dir)])
+  result_dir = os.path.join(env_dir, f'{total_files + 1}')
+  os.makedirs(result_dir)
 
-  policy_kwargs = dict(
-      features_extractor_class=CustomCNN,
-      features_extractor_kwargs=dict(
-          features_dim=features_dim,
-          num_frames=num_frames,
-          fcnet_hiddens=fcnet_hiddens,
-      ),
-      net_arch=[features_dim],
-  )
+  print("MAIN",dim_info)
 
-  tensorboard_log = "./results/sb3/harvest_open_ppo_paramsharing"
+  maddpg = MADDPG(dim_info= dim_info, capacity= buffer_capacity, batch_size=batch_size, actor_lr=actor_lr, critic_lr=critic_lr, res_dir = result_dir)
 
-  print("Type of env: ", type(env))
+  step = 0 
+  agent_num = env.num_agents
+  episode_rewards = {agent_id: np.zeros(episode_num) for agent_id in env.agents}
+  for episode in range(episode_num):
+        obs = env.reset()
+        agent_reward = {agent_id: 0 for agent_id in env.agents}  # agent reward of the current episode
+        while env.agents:  # interact with the env for an episode
+            step += 1
+            if step < random_steps:
+                action = {agent_id: env.action_space(agent_id).sample() for agent_id in env.agents}
+            else:
+                action = maddpg.select_action(obs)
 
-  model = stable_baselines3.PPO(
-      "CnnPolicy",
-      env=env,
-      learning_rate=lr,
-      n_steps=rollout_len,
-      batch_size=batch_size,
-      n_epochs=n_epochs,
-      gamma=gamma,
-      gae_lambda=gae_lambda,
-      ent_coef=ent_coef,
-      max_grad_norm=grad_clip,
-      target_kl=target_kl,
-      policy_kwargs=policy_kwargs,
-      tensorboard_log=tensorboard_log,
-      verbose=verbose,
-  )
-  if model_path is not None:
-    model = stable_baselines3.PPO.load(model_path, env=env)
-  eval_callback = callbacks.EvalCallback(
-      eval_env, eval_freq=eval_freq, best_model_save_path=tensorboard_log)
-  model.learn(total_timesteps=total_timesteps, callback=eval_callback)
+            next_obs, reward, terminated, truncated, info = env.step(action)
+            # env.render()
+            maddpg.add(obs, action, reward, next_obs, terminated | truncated)
 
-  logdir = model.logger.dir
-  model.save(logdir + "/model")
-  del model
-  model = stable_baselines3.PPO.load(logdir + "/model")  # noqa: F841
+            for agent_id, r in reward.items():  # update reward
+                agent_reward[agent_id] += r
 
+            if step >= random_steps and step % learn_interval == 0:  # learn every few steps
+                maddpg.learn(batch_size, gamma)
+                maddpg.update_target(tau)
+
+            obs = next_obs
+
+        # episode finishes
+        for agent_id, r in agent_reward.items():  # record reward
+            episode_rewards[agent_id][episode] = r
+
+        if (episode + 1) % 100 == 0:  # print info every 100 episodes
+            message = f'episode {episode + 1}, '
+            sum_reward = 0
+            for agent_id, r in agent_reward.items():  # record reward
+                message += f'{agent_id}: {r:>4f}; '
+                sum_reward += r
+            message += f'sum reward: {sum_reward}'
+            print(message)
+
+  maddpg.save(episode_rewards)  # save model
+
+
+  def get_running_reward(arr: np.ndarray, window=100):
+        """calculate the running reward, i.e. average of last `window` elements from rewards"""
+        running_reward = np.zeros_like(arr)
+        for i in range(window - 1):
+            running_reward[i] = np.mean(arr[:i + 1])
+        for i in range(window - 1, len(arr)):
+            running_reward[i] = np.mean(arr[i - window + 1:i + 1])
+        return running_reward   
+  
+  fig, ax = plt.subplots()
+  x = range(1, episode_num + 1)
+  for agent_id, reward in episode_rewards.items():
+      ax.plot(x, reward, label=agent_id)
+      ax.plot(x, get_running_reward(reward))
+  ax.legend()
+  ax.set_xlabel('episode')
+  ax.set_ylabel('reward')
+  title = f'training result of maddpg solve {substrate_name}'
+  ax.set_title(title)
+  plt.savefig(os.path.join(result_dir, title)) 
+     
+  # env = ss.pettingzoo_env_to_vec_env_v1(env)
+  # print("3",type(env))
+  # print("3",(env.par_env.observation_space('agent_0')))
+  # print("3",(env.par_env.observation_space('agent_1')))
+  # print("3",(env.par_env.action_space('agent_0')))
+  # print("3",(env.par_env.action_space('agent_1')))
+
+  # print("3", type(env.observation_space))
+  # print("3",type(env.action_space))
+#   env = ss.concat_vec_envs_v1(
+#       env,
+#       num_vec_envs=num_envs,
+#       num_cpus=num_cpus,
+#       base_class="stable_baselines3")
+#   print("4",type(env))   
+#   print("4",type(env.observation_space)) 
+#   print("4",type(env.action_space))
+#   env = vec_env.VecMonitor(env)
+#   print("5",type(env))
+#   print("5",type(env.observation_space))
+#   print("5",type(env.action_space))
+  # env = vec_env.VecTransposeImage(env, True)
+  # print("6",type(env))
+  # print("6",type(env.observation_space))
+  # print("6",type(env.action_space))
+#   env = vec_env.VecFrameStack(env, num_frames)
+#   print("7",type(env))
+#   print("7",type(env.observation_space))
+#   print("7",type(env.action_space))
 
 if __name__ == "__main__":
   main()
