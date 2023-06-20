@@ -164,22 +164,15 @@ def main():
   for i in seeds:
     checkpoints_dict[i] = []
 
-
-
   for i in range(num_iters):
-
     for seed in range(num_seeds):
-
-        
 
         algo_config = config.build()
         dummy_config = config.build()
 
-
         path_to_checkpoint = algo_config.save(f"checkpoints/seed_{seed}")
         checkpoints_dict[f"Seed_{seed}"].append(path_to_checkpoint)
-
-        print("An algo_config is saved at: ", path_to_checkpoint)
+        # print("An algo_config is saved at: ", path_to_checkpoint)
       
         # Set Player 1's policy
         if (len(checkpoints_dict[f"Seed_{seed}"]) > 0):
