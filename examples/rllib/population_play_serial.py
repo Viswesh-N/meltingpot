@@ -152,8 +152,8 @@ def main():
   # 6. Initialize ray, train and save
   ray.init()
 
-  train_batch_size = 1600
-  total_timesteps = 5000000
+  train_batch_size = 2
+  total_timesteps = 50
   num_iters = total_timesteps // train_batch_size
 
 
@@ -165,8 +165,10 @@ def main():
     checkpoints_dict[i] = []
 
   for i in range(num_iters):
+
     for seed in range(num_seeds):
 
+        config = get_config()
         algo_config = config.build()
         dummy_config = config.build()
 
@@ -186,21 +188,20 @@ def main():
             loader_opp = dummy_config.get_policy("agent_1").get_weights()
             algo_config.get_policy("agent_1").set_weights(loader_opp)
         
-
-        config = algo_config.get_config()
         
+        # 7. Train  
+        for _ in range(train_batch_size):
+          algo_config.train()
+        
+        # 8. Save the checkpoint
+        path_to_checkpoint = algo_config.save(f"checkpoints/seed_{seed}")
+        checkpoints_dict[f"Seed_{seed}"].append(path_to_checkpoint)
+
+        # 9. Print the details about iteration and algorithm
+        print("Iteration: ", i)
+        print("Checkpoint saved at: ", path_to_checkpoint)
+        print("--------------------------------------------------")
             
-        stop = {
-        "training_iteration": 2,                       # train_batch_size = 1600
-        }
-
-        results = tune.Tuner(
-        "PPO",
-        param_space=config,
-        run_config=air.RunConfig(name= "PPO_expt", local_dir=f"checkpoints/seed_{seed}", stop=stop, checkpoint_config = air.CheckpointConfig(checkpoint_frequency = 20),verbose=1),
-        )
-        results.fit()
-
 if __name__ == "__main__":  
   main()
 
