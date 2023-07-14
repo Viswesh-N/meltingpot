@@ -19,12 +19,15 @@ import random
 from examples.rllib import utils
 from meltingpot.python import substrate
 
+from matplotlib import pyplot as plt
+
+
 
 def get_config(
-    substrate_name: str = "bach_or_stravinsky_in_the_matrix__repeated",
+    substrate_name: str = "chicken_in_the_matrix__repeated",
     num_rollout_workers: int = 2,
     rollout_fragment_length: int = 100,
-    train_batch_size: int = 6400,
+    train_batch_size: int = 1600,
     fcnet_hiddens=(64, 64),
     post_fcnet_hiddens=(256,),
     lstm_cell_size: int = 256,
@@ -76,6 +79,7 @@ def get_config(
 
   # 4. Extract space dimensions
   test_env = utils.env_creator(config.env_config)
+
 
   # Setup PPO with policies, one per entry in default player roles.
   policies = {}
@@ -130,6 +134,7 @@ def get_config(
 
 def main():
 
+
   config = get_config()
   tune.register_env("meltingpot", utils.env_creator)
 
@@ -138,8 +143,16 @@ def main():
 
   train_batch_size = 1600
   total_timesteps = 5000000
+  checkpoint_freq = 25
   num_iters = total_timesteps // train_batch_size
-  writer = SummaryWriter()
+  num_iters = num_iters // checkpoint_freq
+
+  rewards_seed0 = []
+  step_seed0 = []
+  rewards_seed1 = []
+  step_seed1 = []
+
+  writer = SummaryWriter(log_dir="logs")
 
   stop = {
       "training_iteration": 1,
@@ -152,39 +165,59 @@ def main():
   for i in seeds:
     checkpoints_dict[i] = []
 
-  for i in range(num_iters):
+  ka = 0
+  kb = 0
+
+  for i in range(10):
+    
 
     for seed in range(num_seeds):
 
       ppo = PPO(config= config.to_dict())
-      path_to_checkpoint = ppo.save(f"checkpoints/seed_{seed}")
-      checkpoints_dict[f"Seed_{seed}"].append(path_to_checkpoint)
-      print("An algo_config is saved at: ", path_to_checkpoint)
+      # path_to_checkpoint = ppo.save(f"checkpoints/seed_{seed}")
+      # checkpoints_dict[f"Seed_{seed}"].append(path_to_checkpoint)
+      # print("An algo_config is saved at: ", path_to_checkpoint)
 
       # Set Player 1's policy
       if (len(checkpoints_dict[f"Seed_{seed}"]) > 0):
-          ppo.restore(checkpoints_dict[f"Seed_{seed}"].pop())
+          ppo.restore(checkpoints_dict[f"Seed_{seed}"][-1])           # This would write both the weights of agent_0 and agent_1 from its own seed
+          print("Current state of checkpoints_dict: ", checkpoints_dict)
+          print("player 0 is restored from: ", checkpoints_dict[f"Seed_{seed}"][-1])
           # print("Seed: ", seed)
-          # print("Policy1 restored from: ", checkpoints_dict[f"Seed_{seed}"][-1])
+          print("Player 0 restored from: ", checkpoints_dict[f"Seed_{seed}"][-1])
 
       # Set Player 2's policy
       swap_seed = random.randint(0, num_seeds - 1)
       if (len(checkpoints_dict[f"Seed_{swap_seed}"]) > 0):
           ppo_dummy = ppo
-          ppo_dummy.restore(checkpoints_dict[f"Seed_{swap_seed}"].pop())
-          loader_opp = ppo_dummy.get_policy("agent_1").get_weights()
-          ppo_dummy.get_policy("agent_1").set_weights(loader_opp)
+          ppo_dummy.restore(checkpoints_dict[f"Seed_{swap_seed}"][-1])
+          loader_opp = ppo_dummy.get_policy("agent_0").get_weights()
+          ppo.set_weights({"agent_1": loader_opp})                      # This would overwrite the weights of agent_1 with agent_0's weight from the other seed
+          print("Current state of checkpoints_dict: ", checkpoints_dict)
+          print("player 1 is restored from: ", checkpoints_dict[f"Seed_{swap_seed}"][-1])
+
+  
           # print("Seed: ", swap_seed)
+
           # print("Policy2 restored from: ", checkpoints_dict[f"Seed_{swap_seed}"][-1])
 
-
-
-      # 7. Train the agent
-      for j in range(train_batch_size):
+      # 7. Train the agent for checkpoint_freq times (ie, 40k steps) before saving the checkpoint
+      for j in range(checkpoint_freq):
         results = ppo.train()
         writer.add_scalar("episode_reward_mean", results["episode_reward_mean"], results["timesteps_total"])
-        writer.add_scalar("agent_0_reward_mean", results["policy_reward_mean"]["agent_0"], results["timesteps_total"])
-        writer.add_scalar("agent_1_reward_mean", results["policy_reward_mean"]["agent_1"], results["timesteps_total"])
+        if (seed == 0):
+          timestep_seed0 = [40000*ka + results["timesteps_total"]]
+          rewards_seed0.append(results["episode_reward_mean"])
+          step_seed0.append(timestep_seed0)
+          ka += 1
+
+        elif (seed == 1):
+          timestep_seed1 = [40000*kb + results["timesteps_total"]]
+          rewards_seed1.append(results["episode_reward_mean"])
+          step_seed1.append(timestep_seed1)
+          kb += 1
+
+
       # 8. Save the checkpoint
       path_to_checkpoint = ppo.save(f"checkpoints/seed_{seed}")
       checkpoints_dict[f"Seed_{seed}"].append(path_to_checkpoint)
@@ -193,12 +226,17 @@ def main():
       print("Iteration: ", i)
       print("Checkpoint saved at: ", path_to_checkpoint)
       print("--------------------------------------------------")
-    
 
+    
       print("EPISODE REWARD MEAN", results["episode_reward_mean"])
       # pretty_print(results)
   writer.close()
-  assert results.num_errors == 0
+  fig, axs = plt.subplots(2)
+  fig.suptitle('Agent 0 and Agent 1 Rewards')
+  axs[0].plot(step_seed0, rewards_seed0)
+  axs[1].plot(step_seed1, rewards_seed1)
+  plt.savefig('rewards_combined.png')
+  # assert results.num_errors == 0
 
 
 if __name__ == "__main__":
