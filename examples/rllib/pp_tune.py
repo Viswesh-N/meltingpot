@@ -14,14 +14,12 @@ from ray.rllib.algorithms.ppo import (
     PPOTF2Policy,
     PPOTorchPolicy,
 )
-from ray.tune.logger import pretty_print
+
 import random
 from examples.rllib import utils
 from meltingpot.python import substrate
 
 from matplotlib import pyplot as plt
-
-
 
 def get_config(
     substrate_name: str = "chicken_in_the_matrix__repeated",
@@ -80,7 +78,6 @@ def get_config(
   # 4. Extract space dimensions
   test_env = utils.env_creator(config.env_config)
 
-
   # Setup PPO with policies, one per entry in default player roles.
   policies = {}
   player_to_agent = {}
@@ -134,7 +131,6 @@ def get_config(
 
 def main():
 
-
   config = get_config()
   tune.register_env("meltingpot", utils.env_creator)
 
@@ -170,21 +166,13 @@ def main():
 
   for i in range(10):
     
-
     for seed in range(num_seeds):
 
       ppo = PPO(config= config.to_dict())
-      # path_to_checkpoint = ppo.save(f"checkpoints/seed_{seed}")
-      # checkpoints_dict[f"Seed_{seed}"].append(path_to_checkpoint)
-      # print("An algo_config is saved at: ", path_to_checkpoint)
 
       # Set Player 1's policy
       if (len(checkpoints_dict[f"Seed_{seed}"]) > 0):
           ppo.restore(checkpoints_dict[f"Seed_{seed}"][-1])           # This would write both the weights of agent_0 and agent_1 from its own seed
-          print("Current state of checkpoints_dict: ", checkpoints_dict)
-          print("player 0 is restored from: ", checkpoints_dict[f"Seed_{seed}"][-1])
-          # print("Seed: ", seed)
-          print("Player 0 restored from: ", checkpoints_dict[f"Seed_{seed}"][-1])
 
       # Set Player 2's policy
       swap_seed = random.randint(0, num_seeds - 1)
@@ -193,13 +181,7 @@ def main():
           ppo_dummy.restore(checkpoints_dict[f"Seed_{swap_seed}"][-1])
           loader_opp = ppo_dummy.get_policy("agent_0").get_weights()
           ppo.set_weights({"agent_1": loader_opp})                      # This would overwrite the weights of agent_1 with agent_0's weight from the other seed
-          print("Current state of checkpoints_dict: ", checkpoints_dict)
-          print("player 1 is restored from: ", checkpoints_dict[f"Seed_{swap_seed}"][-1])
 
-  
-          # print("Seed: ", swap_seed)
-
-          # print("Policy2 restored from: ", checkpoints_dict[f"Seed_{swap_seed}"][-1])
 
       # 7. Train the agent for checkpoint_freq times (ie, 40k steps) before saving the checkpoint
       for j in range(checkpoint_freq):
@@ -226,10 +208,8 @@ def main():
       print("Iteration: ", i)
       print("Checkpoint saved at: ", path_to_checkpoint)
       print("--------------------------------------------------")
-
-    
       print("EPISODE REWARD MEAN", results["episode_reward_mean"])
-      # pretty_print(results)
+
   writer.close()
   fig, axs = plt.subplots(2)
   fig.suptitle('Agent 0 and Agent 1 Rewards')
