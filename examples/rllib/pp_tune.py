@@ -164,7 +164,7 @@ def main():
   ka = 0
   kb = 0
 
-  for i in range(10):
+  for i in range(checkpoint_freq):
     
     for seed in range(num_seeds):
 
